@@ -7,6 +7,9 @@ import dash
 import plotly.graph_objects as go
 from dash import MATCH
 import numpy as np
+from dash import State 
+import scipy
+from scipy.stats import ks_2samp
 
 # JSONファイルの読み込み関数
 def load_data(file_path, task_name):
@@ -616,6 +619,8 @@ def display_clicked_urls(*clickDatas):
         outputs[task_index] = html.Div(["選択されたリンク: ", link])
 
     return outputs'''
+# ファイル末尾あたりに追加
+server = app.server  # ← Render用
 
 if __name__ == "__main__":
-    app.run(debug=True, port=8051)
+    app.run_server(debug=False)#    app.run_server(debug=True, port=8050)
