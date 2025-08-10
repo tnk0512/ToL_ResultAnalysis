@@ -7,6 +7,7 @@ import dash
 import plotly.graph_objects as go
 from dash import MATCH
 import numpy as np
+from flask import Flask, render_template
 
 # JSONファイルの読み込み関数
 def load_data(file_path, task_name):
@@ -483,12 +484,26 @@ for task in file_map.keys():
         for task in file_map.keys()
     ]
 ])'''
-app = Dash(__name__)
+# ========== Flask を親サーバとして作成 ==========
+server = Flask(__name__)
+
+@server.route("/")
+def index():
+    # /dash/ へのリンクと埋め込みを用意したトップページ
+    return render_template("index.html")
+
+# ========== Dash を Flask に統合 ==========
+dash_app = Dash(
+    __name__,
+    server=server,
+    url_base_pathname="/dash/",  # /dash/ 以下でDashを提供
+)
+
 # 初期表示用（先頭のペア）
 _init_date, _init_name = DEFAULT_PAIR.split("|")
 _init_figs = build_figures_for(_init_name, _init_date)
 
-app.layout = html.Div([
+dash_app.layout = html.Div([
     html.H1("User Study Result Dashboard", style={"textAlign": "center"}),
 
     # 参加者×日付の選択
@@ -526,7 +541,8 @@ app.layout = html.Div([
 score_outputs = [Output(f"task{i}-score", "figure") for i in range(1, 6)]
 time_outputs  = [Output(f"task{i}-time", "figure")  for i in range(1, 6)]
 head_outputs  = [Output("disp-participant", "children"), Output("disp-date", "children")]
-@app.callback(
+
+@dash_app.callback(
     score_outputs + time_outputs + head_outputs,
     Input("pair-select", "value"),
 )
@@ -538,7 +554,7 @@ def update_all_figs(pair_value):
     head = [f"Participant: {name}", f"Date: {date}"]
     return score_figs + time_figs + head
 
-@app.callback(
+@dash_app.callback(
     [Output(f"task{i}-url", "children") for i in range(1, 6)],
     [Input(f"task{i}-time", "clickData") for i in range(1, 6)],
     Input("pair-select", "value"),
@@ -618,4 +634,5 @@ def display_clicked_urls(*clickDatas):
     return outputs'''
 
 if __name__ == "__main__":
-    app.run(debug=True, port=8051)
+    # Flaskサーバで一体起動（/ → Flask, /dash/ → Dash）
+    server.run(debug=True, port=8050)
