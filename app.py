@@ -490,6 +490,7 @@ app = Dash(__name__)
 # 初期表示用（先頭のペア）
 _init_date, _init_name = DEFAULT_PAIR.split("|")
 _init_figs = build_figures_for(_init_name, _init_date)
+GRAPH_STYLE = {"height": "420px"}
 
 app.layout = html.Div([
     html.H1("User Study Result Dashboard", style={"textAlign": "center"}),
@@ -514,10 +515,18 @@ app.layout = html.Div([
 
     *[
         html.Div([
-            html.Div(dcc.Graph(id=f"{task}-score", figure=_init_figs[f"{task}-score"]),
-                     style={"width": "50%"}),
+            html.Div(
+                dcc.Graph(id=f"{task}-score",
+                          figure=_init_figs[f"{task}-score"],
+                          style=GRAPH_STYLE,   # ← 追加
+                          config={"responsive": True}),
+                style={"width": "50%"}
+            ),
             html.Div(children=[
-                dcc.Graph(id=f"{task}-time", figure=_init_figs[f"{task}-time"]),
+                dcc.Graph(id=f"{task}-time",
+                          figure=_init_figs[f"{task}-time"],
+                          style=GRAPH_STYLE,   # ← 追加
+                          config={"responsive": True}),
                 html.Div(id=f"{task}-url", style={"textAlign": "center", "marginTop": "10px"})
             ], style={"width": "50%"})
         ], style={"display": "flex", "marginBottom": "40px"})
@@ -623,4 +632,5 @@ def display_clicked_urls(*clickDatas):
 server = app.server  # ← Render用
 
 if __name__ == "__main__":
-    app.run_server(debug=False)#    app.run_server(debug=True, port=8050)
+    app.run_server(debug=False)
+    #app.run(debug=True, port=8050)
