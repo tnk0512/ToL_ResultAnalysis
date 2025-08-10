@@ -11,6 +11,23 @@ from dash import State
 import scipy
 from scipy.stats import ks_2samp
 
+# ------------------- ユーティリティ -------------------
+def ecdf_np(x):
+    x = np.asarray(pd.to_numeric(x, errors="coerce").dropna(), dtype=float)
+    if x.size == 0:
+        return np.array([]), np.array([])
+    x_sorted = np.sort(x)
+    y = np.arange(1, x_sorted.size + 1) / x_sorted.size
+    return x_sorted, y
+
+def load_cdfks_bundle(name: str):
+    """保存済みの cdf_ks_data/cdf_{name}.json を読み込む。無ければ None"""
+    p = Path(f"cdf_ks_data/cdf_{name}.json")
+    if not p.exists():
+        return None
+    with p.open(encoding="utf-8") as f:
+        return json.load(f)
+
 # JSONファイルの読み込み関数
 def load_data(file_path, task_name):
     with open(file_path, encoding="utf-8") as f:
@@ -77,9 +94,7 @@ PAIRS_RAW = [
 ]
 
 # ドロップダウンに使う [{label, value}] 形式（valueは "date|name"）
-PAIR_OPTIONS = [
-    {"label": f"{d} {p}", "value": f"{d}|{p}"} for d, p in PAIRS_RAW
-]
+PAIR_OPTIONS = [{"label": f"{d} {p}", "value": f"{d}|{p}"} for d, p in PAIRS_RAW]
 DEFAULT_PAIR = PAIR_OPTIONS[0]["value"]  # 先頭を初期値
 
 def build_figures_for(name, date):
@@ -98,6 +113,7 @@ def build_figures_for(name, date):
 
     figures = {}
     time_fig_ids = []
+    bundle = load_cdfks_bundle(name)
 
     # ======== ここから先は、あなたの for ループ本体をほぼコピペでOK ========
     for task in file_map.keys():
@@ -144,7 +160,16 @@ def build_figures_for(name, date):
             fig_score = px.scatter(
                 df, x="jittered_depth", y="score", color="status",
                 hover_name="q", title=f"{task}: Score vs Depth {title_suffix}",
+                category_orders={"status": ["Correct", "Incorrect", "Give up"]},
                 color_discrete_map={"Correct":"blue","Incorrect":"red","Give up":"black"}
+            )
+            # 凡例名を変更
+            fig_score.for_each_trace(
+                lambda t: t.update(name={
+                    "Correct": ": ○ (Correct)",
+                    "Incorrect": ": × (Incorrect)",
+                    "Give up": ": Give up"
+                }.get(t.name, t.name))
             )
             low_score_df = df[df["score"] <= 0.3].copy()
             low_score_df["label"] = low_score_df["q"].str.replace("^q", "", regex=True)
@@ -165,14 +190,28 @@ def build_figures_for(name, date):
             fig_score.add_hline(y=mean_1, line=dict(color="blue", dash="dash"),
                                 annotation_text="mean score", annotation_position="top left")
             fig_score.update_layout(yaxis=dict(range=[-0.1, 1.1], fixedrange=True))
+            fig_score.update_layout(
+                legend=dict(orientation="h", yanchor="top", y=-0.2, xanchor="center", x=0.5, font=dict(size=10))
+            )
             score_for_symbol = (df["score"] >= 0.5).astype(float)
         else:
             df["correct"] = df["score"].map({1.0: "Correct", 0.0: "Incorrect"})
             fig_score = px.histogram(
                 df, x="depth", color="correct", barmode="stack", facet_col="colorChange",
-                category_orders={"status": ["Incorrect","Correct","Give up"]},
+                category_orders={"correct": ["Correct", "Incorrect", "Give up"]},
                 color_discrete_map={"Correct":"blue","Incorrect":"red","Give up":"black"},
                 title=f"{task}: Correctness by depth × coloring {title_suffix}"
+            )
+            # 凡例名を変更
+            fig_score.for_each_trace(
+                lambda t: t.update(name={
+                    "Correct": "○",
+                    "Incorrect": "×",
+                    "Give up": "Give up"
+                }.get(t.name, t.name))
+            )
+            fig_score.update_layout(
+                legend=dict(orientation="h", yanchor="top", y=-0.2, xanchor="center", x=0.5, font=dict(size=10))
             )
             score_for_symbol = df["score"]
             fig_score.for_each_annotation(lambda a: a.update(
@@ -199,7 +238,7 @@ def build_figures_for(name, date):
 
         # ---- time 図 ----
         df["score_bin"] = score_for_symbol.astype(int)
-        df["color_score_group"] = df.apply(
+        df["color"] = df.apply(
             lambda row: f"{'Dynamic' if row['colorChange'] == '1' else 'Static'}・{'Correct' if row['score_bin'] == 1 else 'Incorrect'}",
             axis=1
         )
@@ -211,9 +250,22 @@ def build_figures_for(name, date):
         }
         df = apply_conditional_jitter(df)
         fig_time = px.scatter(
-            df, x="jittered_depth", y="time", color="color_score_group",
+            df, x="jittered_depth", y="time", color="color",
             hover_name="q", title=f"{task}: Time vs Depth {title_suffix}",
+            category_orders={
+                "color": [
+                    "Static・Correct", "Static・Incorrect", "Static・Give up",
+                    "Dynamic・Correct", "Dynamic・Incorrect", "Dynamic・Give up"
+                ]
+            },
             color_discrete_map=custom_color_map
+        )
+        
+        fig_time.for_each_trace(
+            lambda t: t.update(name=t.name
+                .replace("Correct", "○")
+                .replace("Incorrect", "×")
+            )
         )
         outliers = df[df["z_time"] >= 1.5]
         fig_time.add_trace(go.Scatter(
@@ -233,9 +285,79 @@ def build_figures_for(name, date):
             yaxis=dict(fixedrange=True, autorange=False,
                        range=[df["time"].min()*0.9, df["time"].max()*1.1])
         )
+        fig_time.update_layout(
+                legend=dict(orientation="h", yanchor="top", y=-0.2, xanchor="center", x=0.5, font=dict(size=10))
+        )
+
+        # ---- cdf 図（保存済みJSONがあれば利用、なければその場で計算）----
+        xs = ys = xd = yd = np.array([])
+        ks_stat = p_val = None
+        n_static = n_dynamic = 0
+
+        if bundle and "tasks" in bundle and task in bundle["tasks"]:
+            t = bundle["tasks"][task]
+            cdf_s = t.get("cdf", {}).get("static", {})
+            cdf_d = t.get("cdf", {}).get("dynamic", {})
+            xs = np.array(cdf_s.get("x", []), dtype=float)
+            ys = np.array(cdf_s.get("y", []), dtype=float)
+            xd = np.array(cdf_d.get("x", []), dtype=float)
+            yd = np.array(cdf_d.get("y", []), dtype=float)
+            ks_info = t.get("ks", {})
+            ks_stat = ks_info.get("statistic", None)
+            p_val = ks_info.get("p_value", None)
+            n_static = ks_info.get("n_static", 0)
+            n_dynamic = ks_info.get("n_dynamic", 0)
+        else:
+            # フォールバック: 今のdfから作る
+            time_static = df[df["colorChange"] == "0"]["time"]
+            time_dynamic = df[df["colorChange"] == "1"]["time"]
+            xs, ys = ecdf_np(time_static)
+            xd, yd = ecdf_np(time_dynamic)
+            n_static, n_dynamic = len(time_static), len(time_dynamic)
+            if n_static >= 2 and n_dynamic >= 2:
+                ks_stat, p_val = ks_2samp(time_static, time_dynamic)
+            else:
+                ks_stat, p_val = None, None
+
+        # Plotlyで階段（step-post）を再現するには line_shape="hv"
+        fig_cdf = go.Figure()
+        fig_cdf.add_trace(go.Scatter(
+            x=xs, y=ys, mode="lines", name=f"Static (n={n_static})",
+            line=dict(shape="hv")
+        ))
+        fig_cdf.add_trace(go.Scatter(
+            x=xd, y=yd, mode="lines", name=f"Dynamic (n={n_dynamic})",
+            line=dict(shape="hv")
+        ))
+        fig_cdf.update_layout(
+            title=dict(text=f"{task} - CDF", x=0.5, xanchor="center"),
+            xaxis_title="Time (ms)",
+            yaxis_title="Cumulative Probability",
+            margin=dict(t=80, r=10, b=40, l=60),  # ← 上に余白を確保（重なり回避）
+            legend=dict(x=0.98, y=0.02, xanchor="right", yanchor="bottom")
+        )
+        # 上段に統計値（タイトルより上・左右分離）
+        if ks_stat is not None and p_val is not None:
+            fig_cdf.add_annotation(
+                x=0.2, y=1.12, xref="paper", yref="paper",
+                text=f"KS statistic = {ks_stat:.3f}",
+                showarrow=False, font=dict(size=12, color="black"), xanchor="center"
+            )
+            fig_cdf.add_annotation(
+                x=0.66, y=1.12, xref="paper", yref="paper",
+                text=f"p-value = {p_val:.3f}",
+                showarrow=False, font=dict(size=12, color=("red" if p_val <= 0.05 else "black")),
+                xanchor="center"
+            )
+        else:
+            fig_cdf.add_annotation(
+                x=0.5, y=1.12, xref="paper", yref="paper",
+                text="KS/p: n不足で未実施", showarrow=False, font=dict(size=12), xanchor="center"
+            )
 
         figures[f"{task}-score"] = fig_score
         figures[f"{task}-time"] = fig_time
+        figures[f"{task}-cdf"]   = fig_cdf
         time_fig_ids.append(f"{task}-time")
 
     return figures  # dict: { "task1-score": fig, "task1-time": fig, ... }
@@ -518,17 +640,22 @@ app.layout = html.Div([
             html.Div(
                 dcc.Graph(id=f"{task}-score",
                           figure=_init_figs[f"{task}-score"],
-                          style=GRAPH_STYLE,   # ← 追加
-                          config={"responsive": True}),
-                style={"width": "50%"}
+                          style=GRAPH_STYLE, config={"responsive": True}),
+                style={"width": "40%"}
             ),
             html.Div(children=[
-                dcc.Graph(id=f"{task}-time",
-                          figure=_init_figs[f"{task}-time"],
-                          style=GRAPH_STYLE,   # ← 追加
-                          config={"responsive": True}),
-                html.Div(id=f"{task}-url", style={"textAlign": "center", "marginTop": "10px"})
-            ], style={"width": "50%"})
+              dcc.Graph(id=f"{task}-time",
+                        figure=_init_figs[f"{task}-time"],
+                        style=GRAPH_STYLE, config={"responsive": True}),
+              html.Div(id=f"{task}-url",
+                       style={"textAlign": "center", "marginTop": "10px"})
+            ], style={"width": "40%"}),
+            html.Div(
+                dcc.Graph(id=f"{task}-cdf",
+                          figure=_init_figs[f"{task}-cdf"],
+                          style=GRAPH_STYLE, config={"responsive": True}),
+                style={"width": "25%"}
+            )
         ], style={"display": "flex", "marginBottom": "40px"})
         for task in [f"task{i}" for i in range(1, 6)]
     ]
@@ -537,9 +664,11 @@ app.layout = html.Div([
 # 図更新（score/time × 5タスク = 10出力）＋ 見出し2出力
 score_outputs = [Output(f"task{i}-score", "figure") for i in range(1, 6)]
 time_outputs  = [Output(f"task{i}-time", "figure")  for i in range(1, 6)]
+cdf_outputs   = [Output(f"task{i}-cdf",   "figure") for i in range(1, 6)]
 head_outputs  = [Output("disp-participant", "children"), Output("disp-date", "children")]
+
 @app.callback(
-    score_outputs + time_outputs + head_outputs,
+    score_outputs + time_outputs + cdf_outputs + head_outputs,
     Input("pair-select", "value"),
 )
 def update_all_figs(pair_value):
@@ -547,8 +676,9 @@ def update_all_figs(pair_value):
     figs = build_figures_for(name, date)
     score_figs = [figs[f"task{i}-score"] for i in range(1, 6)]
     time_figs  = [figs[f"task{i}-time"]  for i in range(1, 6)]
+    cdf_figs   = [figs[f"task{i}-cdf"]   for i in range(1, 6)]
     head = [f"Participant: {name}", f"Date: {date}"]
-    return score_figs + time_figs + head
+    return score_figs + time_figs + cdf_figs + head
 
 @app.callback(
     [Output(f"task{i}-url", "children") for i in range(1, 6)],
@@ -581,53 +711,6 @@ def display_clicked_urls(*args):
             outputs[idx] = html.Div(["選択されたリンク: ", link])
     return outputs
 
-'''
-app.layout = html.Div([
-    html.H1("User Study Result Dashboard", style={"textAlign": "center"}),
-
-     # 被験者名と日時の表示（中央寄せ）
-    html.Div([
-        html.P(f"Participant: {name}", style={"margin": "5px"}),
-        html.P(f"Date: {date}", style={"margin": "5px"})
-    ], style={"textAlign": "center", "fontSize": "16px", "marginBottom": "10px"}),
-    
-    *[
-        html.Div([
-            html.Div(dcc.Graph(id=f"{task}-score", figure=figures[f"{task}-score"]),
-                     style={"width": "50%"}),
-            html.Div(children=[
-                dcc.Graph(id=f"{task}-time", figure=figures[f"{task}-time"]),
-                html.Div(id=f"{task}-url", style={"textAlign": "center", "marginTop": "10px"})
-            ], style={"width": "50%"})
-        ], style={"display": "flex", "marginBottom": "40px"})
-        for task in file_map.keys()
-    ]
-])
-
-@app.callback(
-    [Output(f"{task}-url", "children") for task in file_map.keys()],
-    [Input(f"{task}-time", "clickData") for task in file_map.keys()],
-    prevent_initial_call=True
-)
-def display_clicked_urls(*clickDatas):
-    outputs = [None for _ in file_map]  # 全部初期化
-
-    triggered_id = ctx.triggered_id
-    if not triggered_id:
-        return outputs
-
-    task = triggered_id.replace("-time", "")
-    task_index = list(file_map.keys()).index(task)
-
-    clickData = clickDatas[task_index]
-    if clickData:
-        q_str = clickData["points"][0]["hovertext"]
-        q_num = q_str.replace("q", "")
-        url = f"http://127.0.0.1:5000/ToL?task={task}&tasknum={q_num}"
-        link = html.A(url, href=url, target="_blank", style={"color": "blue"})
-        outputs[task_index] = html.Div(["選択されたリンク: ", link])
-
-    return outputs'''
 # ファイル末尾あたりに追加
 server = app.server  # ← Render用
 
