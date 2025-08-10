@@ -608,10 +608,14 @@ for task in file_map.keys():
         for task in file_map.keys()
     ]
 ])'''
-app = Dash(__name__)
+app = Dash(__name__, suppress_callback_exceptions=True)
 # 初期表示用（先頭のペア）
 _init_date, _init_name = DEFAULT_PAIR.split("|")
-_init_figs = build_figures_for(_init_name, _init_date)
+#_init_figs = build_figures_for(_init_name, _init_date)
+_init_figs = {f"task{i}-score": go.Figure(layout_title_text="") for i in range(1, 6)}
+_init_figs.update({f"task{i}-time": go.Figure(layout_title_text="") for i in range(1, 6)})
+_init_figs.update({f"task{i}-cdf": go.Figure(layout_title_text="") for i in range(1, 6)})
+
 GRAPH_STYLE = {"height": "420px"}
 
 app.layout = html.Div([
